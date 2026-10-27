@@ -1,0 +1,10 @@
+# Project Streamlit settings (read when `streamlit run` is started from the project root).
+
+[server]
+# The dashboard has no login: only listen on this machine.
+address = "localhost"
+headless = true
+
+[browser]
+# Do not send usage statistics to Streamlit.
+gatherUsageStats = false
