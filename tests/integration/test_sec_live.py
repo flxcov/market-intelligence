@@ -46,6 +46,14 @@ async def test_ticker_map_submissions_and_facts_parse() -> None:
         FactSource(facts.payload, APPLE, facts.url, facts.retrieved_at, now.date())
     )
     assert fundamentals.value("revenue") and fundamentals.value("revenue") > 0
+    # Apple files a 10-K every year, so the latest annual period must be recent. A stale
+    # period means a superseded XBRL concept was used (us-gaap:Revenues ends at FY2018).
+    for key in ("revenue", "net_income", "operating_cash_flow", "diluted_shares"):
+        period_end = fundamentals.evidence[key].period_end
+        assert period_end and (now.date() - period_end).days <= 460, (key, period_end)
+    revenue, prior = fundamentals.evidence["revenue"], fundamentals.evidence["revenue_prior"]
+    assert revenue.period_end == fundamentals.evidence["net_income"].period_end
+    assert 350 <= (revenue.period_end - prior.period_end).days <= 380
     assert fundamentals.evidence["revenue"].source_url.startswith(
         "https://www.sec.gov/Archives/edgar/data/320193/"
     )

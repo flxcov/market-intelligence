@@ -41,15 +41,15 @@ class FactSource:
         self.retrieved_at, self.as_of = retrieved_at, as_of
 
     def facts(self, concepts: list[str], unit: str, taxonomy: str = "us-gaap") -> list[XbrlFact]:
-        for concept in concepts:  # first concept the company actually reports wins
-            found = [
-                f
-                for f in parse_facts(self.payload, taxonomy, concept)
-                if f.unit == unit and f.filed <= self.as_of
-            ]
-            if found:
-                return found
-        return []
+        # All listed concepts, not just the first one found: companies switch tags over time
+        # (Apple reported us-gaap:Revenues until FY2018, then RevenueFromContractWith...), so
+        # the first concept can hold only stale periods. Callers pick the period first.
+        return [
+            f
+            for concept in concepts
+            for f in parse_facts(self.payload, taxonomy, concept)
+            if f.unit == unit and f.filed <= self.as_of
+        ]
 
     def annual(self, concepts: list[str], unit: str = "USD", years_back: int = 0):
         annual = [f for f in self.facts(concepts, unit) if 350 <= (f.duration_days or 0) <= 380]
@@ -61,14 +61,14 @@ class FactSource:
             ends = [e for e in ends if abs((e - target).days) <= 20]
             if not ends:
                 return None
-        return _latest_filed([f for f in annual if f.end == ends[0]])
+        return _preferred([f for f in annual if f.end == ends[0]], concepts, taxonomy="us-gaap")
 
     def instant(self, concepts: list[str], unit: str = "USD", taxonomy: str = "us-gaap"):
         instants = [f for f in self.facts(concepts, unit, taxonomy) if f.start is None]
         if not instants:
             return None
         latest = max(f.end for f in instants)
-        return _latest_filed([f for f in instants if f.end == latest])
+        return _preferred([f for f in instants if f.end == latest], concepts, taxonomy)
 
     def evidence(self, key: str, claim: str, fact: XbrlFact) -> Evidence:
         return Evidence(
@@ -88,6 +88,13 @@ class FactSource:
             filed=fact.filed,
             retrieved_at=self.retrieved_at,
         )
+
+
+def _preferred(facts: list[XbrlFact], concepts: list[str], taxonomy: str) -> XbrlFact:
+    # Same period under several concepts: the earlier-listed concept wins.
+    order = [f"{taxonomy}:{c}" for c in concepts]
+    best = min(order.index(f.concept) for f in facts)
+    return _latest_filed([f for f in facts if order.index(f.concept) == best])
 
 
 def _latest_filed(facts: list[XbrlFact]) -> XbrlFact:

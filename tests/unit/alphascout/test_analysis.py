@@ -75,6 +75,52 @@ def test_no_look_ahead_and_restatements_known_at_the_time() -> None:
     assert later.value("revenue") == D(125_000_000)
 
 
+def _switch_revenue_concept(payload: dict, new_rows: list[dict]) -> dict:
+    # Like Apple: us-gaap:Revenues stops at an old year, the current tag carries on.
+    us_gaap = payload["facts"]["us-gaap"]
+    us_gaap["Revenues"]["units"]["USD"] = [
+        r for r in us_gaap["Revenues"]["units"]["USD"] if r["end"] == "2022-12-31"
+    ]
+    us_gaap["RevenueFromContractWithCustomerExcludingAssessedTax"] = {
+        "label": "synthetic",
+        "description": "synthetic",
+        "units": {"USD": new_rows},
+    }
+    return payload
+
+
+def test_latest_period_wins_across_revenue_concepts() -> None:
+    k23 = {"accn": sp.K23[0], "form": "10-K", "filed": sp.K23[2], "fy": 2023, "fp": "FY"}
+    payload = _switch_revenue_concept(
+        sp.company_facts(),
+        [
+            {"start": "2023-01-01", "end": "2023-12-31", "val": 100_000_000, **k23},
+            {"start": "2022-01-01", "end": "2022-12-31", "val": 80_000_000, **k23},
+        ],
+    )
+    f = extract_fundamentals(FactSource(payload, sp.CIK, "url", AS_OF, AS_OF.date()))
+    revenue = f.evidence["revenue"]
+    assert revenue.value == D(100_000_000)  # not the FY2022 value under the stale tag
+    assert revenue.concept == "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax"
+    assert revenue.period_end == date(2023, 12, 31)
+    # FY2022 is reported under both tags: the earlier-listed concept (Revenues) wins.
+    assert f.evidence["revenue_prior"].concept == "us-gaap:Revenues"
+    assert f.value("revenue_prior") == D(80_000_000)
+    assert f.value("revenue_growth") == D("0.2500")
+
+
+def test_concept_switch_still_respects_as_of() -> None:
+    k24 = {"accn": sp.K24[0], "form": "10-K", "filed": sp.K24[2], "fy": 2024, "fp": "FY"}
+    payload = _switch_revenue_concept(
+        sp.company_facts(),
+        [{"start": "2024-01-01", "end": "2024-12-31", "val": 125_000_000, **k24}],
+    )
+    # The newer tag's only value is filed after as_of: fall back to what was known then.
+    f = extract_fundamentals(FactSource(payload, sp.CIK, "url", AS_OF, AS_OF.date()))
+    assert f.value("revenue") == D(80_000_000)
+    assert f.evidence["revenue"].concept == "us-gaap:Revenues"
+
+
 def test_derived_metrics_are_exact() -> None:
     f = fundamentals()
     assert f.value("revenue_growth") == D("0.2500")
